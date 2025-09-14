@@ -1,0 +1,13 @@
+# Ignore logs and secrets
+logs/
+secure_archives/
+*.log
+*.txt
+*.gz
+*.enc
+*.sha256
+/root/eyes_secret
+
+# Ignore system files
+*.swp
+*.bak
