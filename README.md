@@ -51,9 +51,16 @@ sudo systemctl restart php*-fpm nginx
 
 Usage
 
-create a self-signed cert and private key with apache server as described in the self-cert-sample.txt
+-- create a self-signed cert and private key with apache server as described in the self-cert-sample.txt
 
-Open the site in a browser (http://1234.ngrok.app/index.html).
+SSLCertificateFile /etc/ssl/certs/eyes.crt
+SSLCertificateKeyFile /etc/ssl/private/eyes.key
+
+-- Install ngrok and authenticate ngrok
+
+-- sudo ngrok http 443
+
+-- Open the site in a browser (http://1234.ngrok.app/index.html).
 
 The system will attempt to collect client geolocation; if unavailable, it falls back to IP-based lookup.
 
