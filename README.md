@@ -54,9 +54,10 @@ Usage
 -- create a self-signed cert and private key with apache server as described in the self-cert-sample.txt
 
 SSLCertificateFile /etc/ssl/certs/eyes.crt
+
 SSLCertificateKeyFile /etc/ssl/private/eyes.key
 
--- Install ngrok and authenticate ngrok
+-- Install ngrok and authenticate ngrok with your Auth key.
 
 -- sudo ngrok http 443
 
@@ -89,3 +90,4 @@ Eyes is designed for authorized investigative use only.
 Unauthorized use is prohibited. Logs and data may contain sensitive information — handle with care.
 
 ## Please Contribute to the repository if you can. ##
+## For Educational Purposes Only ##
