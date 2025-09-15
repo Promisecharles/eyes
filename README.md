@@ -50,11 +50,13 @@ sudo systemctl restart php*-fpm nginx
 
 
 Usage
+
 create a self-signed cert and private key with apache server as described in the self-cert-sample.txt
 
-Open the site in a browser (http://<your-server>/index.html).
+Open the site in a browser (http://1234.ngrok.app/index.html).
 
 The system will attempt to collect client geolocation; if unavailable, it falls back to IP-based lookup.
+
 All events are logged under /opt/eyes/logs/:
 data.txt — full structured log entries
 ip.txt — IP-specific entries
